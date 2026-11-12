@@ -49,6 +49,7 @@ from .autosave import AutoSaver
 from .background import Job
 from .checks_dock import ChecksDock
 from .contours import ContourLayer
+from .draft import DraftImports
 from .drop import MARKS, DropClient
 from .elevation import PICK_PX, ElevationControl, ElevationPanel
 from .gone_dock import GoneDock
@@ -1196,6 +1197,7 @@ class MainWindow(QMainWindow):
         self.territory.abort()
         self.fetcher.abort()
         self.zone_editor.detach()
+        self.draft_imports.detach()
         self.waiting.detach()
         if self._alongside_job is not None:     # it held this window, kept by the pool
             self._alongside_job.release()
@@ -1319,6 +1321,8 @@ class MainWindow(QMainWindow):
         self.import_action = QAction('&Import…', self)
         self.import_action.triggered.connect(self.importer.start)
         file.addAction(self.import_action)
+        self.draft_imports = DraftImports(self)
+        self.draft_imports.add_menu(file)
         file.addSeparator()
         self.save_action = QAction('&Save', self)
         self.save_action.setShortcut(QKeySequence(self.settings.key('file.save')))

@@ -6949,3 +6949,50 @@ drawn backwards would turn sea into land, and a ring cannot be backwards.
 On N43E026's set the strip went from 2% land to all of it outside the rings;
 the land and sea of that view lie on the sea's rings.
 
+## Local JOSM drafts
+
+File › JOSM drafts imports water, coastlines and peaks from `.osm` or
+`.osm.xz` files. Each category has a source, Reload file, and Remove imported
+features. The scope is the currently open working area's squares, rather
+than the viewport or the whole server zone. A replacement takes out that
+category's previous draft in those squares, including objects absent from
+the new file. Existing contours and independently imported main-map data
+are kept. Changes to the draft features themselves are replaced too.
+
+`water.draft` filters the saved JOSM layer to the requested roots and their
+dependencies, ignores deleted objects, and checks completeness before
+placement. Missing nodes or members, cyclic relations, unclosed water rings
+and peaks without usable heights are reported. The editor offers to import
+the valid features only or cancel without changing the old batch. A read or
+parse failure keeps the old batch. Reads and spatial selection run on a
+worker; a stale answer cannot change another working set or replace a source
+that was subsequently removed.
+
+Every primitive gets a fresh negative ID, independent of both the map API
+and JOSM's temporary IDs, and a `danu:draft` ownership tag. A relation with no
+members records the category, source key and filename in each working square,
+including those with an empty import. It carries no elevation or geographic
+tags. The source key is a hash of the file's absolute path; the path itself
+is kept only in local settings. Source records and geometry therefore survive
+save, autosave and reopen without publishing a local filesystem path. A
+source moved to another computer is reattached by importing its file there.
+
+`ReplaceDraft` changes only the source's primitives, with exact undo/redo
+and autosave journal coverage. A dependency adopted by a separately drawn
+contour or relation is retained without draft ownership. Undo restores
+dictionary order as well as data, since way order affects raster burning.
+Commands for all affected squares are applied as one history step.
+
+Features wholly outside the area are excluded; intersection includes a
+segment whose endpoints are outside and a lake enclosing an entire square.
+Cross-boundary features retain complete geometry, while their lines, fills,
+coast marks and labels are clipped to the union of working squares. Picking
+and snapping exclude hidden draft geometry. Peaks can be imported before
+contours cover them. The canvas also draws water and spot heights when no
+contours exist yet; its old empty-contour early return prevented that.
+
+The file data participates in the existing terrain build and remains subject
+to the existing `upload='never'` square serialization. It is never sent to
+the OGF map database. Reloading after changing the working area is explicit;
+opening a square does not reread an external file.
+

@@ -1,3 +1,18 @@
+danu (1.6.0-1) unstable; urgency=medium
+
+  * Add File > JOSM drafts: import water features, coastlines and peaks from
+    local .osm or .osm.xz files for terrain work before they reach the map.
+  * Reload or replace each draft source, removing its previous features in
+    the open working area, with one-step undo/redo and save/autosave support.
+  * Remap JOSM objects to safe local IDs, report incomplete geometry, and
+    exclude unrelated features and features outside the working area.
+  * Keep crossing features complete while clipping their display to the
+    working area. Accept draft peaks before contours cover them, and draw
+    water and spot heights even when no contours have been drawn yet.
+  * Keep absolute source paths in local settings rather than shared squares.
+
+ -- minimapper-ogf <trentdrust@gmail.com>  Thu, 12 Nov 2026 13:14:46 -0500
+
 danu (1.5.3-1) unstable; urgency=medium
 
   * Surfaces: water held in a zone square outside the open set and reaching

@@ -193,6 +193,7 @@ class _Piece:
     # paint; and its path cut to the view last drawn, by that view
     rings: list | None = field(default=None, compare=False, repr=False)
     cut: tuple = field(default=(None, None), compare=False, repr=False)
+    draft: bool = False
 
     def fill(self, view: QRectF) -> QPainterPath:
         """What of a water fill to draw in ``view``: the whole path, or for
@@ -399,6 +400,7 @@ class Spot:
     # graded river of three hundred vertices does not bury them; and never
     # picked as one, because a spot height selected is a node Delete removes
     on_water: bool = False
+    draft: bool = False
 
 
 @dataclass
@@ -408,6 +410,7 @@ class Label:
     y: float
     angle: float      # degrees, upright
     length: float     # of the way, scene units
+    draft: bool = False
 
 
 @dataclass
@@ -479,6 +482,7 @@ class ContourLayer(QGraphicsItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.setZValue(100)
         self.working_set: WorkingSet | None = None
+        self._draft_boundary = QPainterPath()
         # per way, not per level: see _Piece and paint()
         self.paths: dict[float, list[_Piece]] = {}
         self.labels: list[Label] = []
@@ -560,6 +564,14 @@ class ContourLayer(QGraphicsItem):
     def set_working_set(self, ws: WorkingSet | None, ramp: Ramp | None = None):
         self.prepareGeometryChange()
         self.working_set = ws
+        self._draft_boundary = QPainterPath()
+        self._draft_boundary.setFillRule(Qt.FillRule.WindingFill)
+        if ws is not None:
+            for name in ws.squares:
+                west, south, east, north = name.bounds
+                x0, y0 = m.lonlat_to_scene(west, north)
+                x1, y1 = m.lonlat_to_scene(east, south)
+                self._draft_boundary.addRect(QRectF(x0, y0, x1 - x0, y1 - y0))
         # _text is not cleared with them: it is keyed on the label's string and
         # the font, and the strings are elevations, which are the same from one
         # working set to the next. It grows with the distinct pairs ever shown,
@@ -724,7 +736,7 @@ class ContourLayer(QGraphicsItem):
             return
         x, y = m.lonlat_to_scene(node.lon, node.lat)
         self.spots[key] = Spot(square, node_id, ele, x, y,
-                               on_water=self._water_refs.get(key, 0) > 0)
+                               on_water=self._water_refs.get(key, 0) > 0, draft=bool(node.tags.get('danu:draft')))
 
     def refresh_spots(self, square: Square, node_ids) -> None:
         """Some nodes of a square changed - re-project the ones that are spot
@@ -1046,7 +1058,7 @@ class ContourLayer(QGraphicsItem):
         if not water_tags(rel.tags):
             return
         paths = [self._ring_path(square, r) for r in relation_rings(square, rel)]
-        self._put_fill(key, [p for p in paths if p], parse_ele(rel.tags.get('ele')))
+        self._put_fill(key, [p for p in paths if p], parse_ele(rel.tags.get('ele')), bool(rel.tags.get('danu:draft')))
 
     def _way_fill(self, square: Square, way: Way, members) -> None:
         """A closed water way's own fill, unless a water relation names it.
@@ -1070,7 +1082,7 @@ class ContourLayer(QGraphicsItem):
         if way.id in members or not water_tags(way.tags) or not is_closed(way):
             return
         ring = self._ring_path(square, way.refs)
-        self._put_fill(key, [ring] if ring else [], parse_ele(way.tags.get('ele')))
+        self._put_fill(key, [ring] if ring else [], parse_ele(way.tags.get('ele')), bool(way.tags.get('danu:draft')))
 
     @staticmethod
     def _ring_path(square: Square, refs) -> list:
@@ -1091,7 +1103,7 @@ class ContourLayer(QGraphicsItem):
         pts = m.lonlat_to_scene_array([n.lon for n in placed], [n.lat for n in placed])
         return pts.tolist()
 
-    def _put_fill(self, key, rings: list, ele: float | None = None) -> None:
+    def _put_fill(self, key, rings: list, ele: float | None = None, draft: bool = False) -> None:
         if not rings:
             return
         path = QPainterPath()
@@ -1101,7 +1113,7 @@ class ContourLayer(QGraphicsItem):
             for x, y in ring[1:]:
                 path.lineTo(x, y)
             path.closeSubpath()
-        piece = _Piece(path, path.boundingRect(), ele, None)
+        piece = _Piece(path, path.boundingRect(), ele, None, draft=draft)
         if sum(len(r) for r in rings) > BIG_FILL:
             # without the closing point, as _cut_ring takes them: it closes
             # each ring itself, last point to first - _ring_path's rings close
@@ -1163,7 +1175,7 @@ class ContourLayer(QGraphicsItem):
         xs, ys = g.pts[:, 0], g.pts[:, 1]
         rect = QRectF(float(xs.min()) - 1, float(ys.min()) - 1,
                       float(xs.max() - xs.min()) + 2, float(ys.max() - ys.min()) + 2)
-        self.water[key] = _Piece(path, rect, None, None)
+        self.water[key] = _Piece(path, rect, None, None, draft=bool(g.way.tags.get('danu:draft')))
         for r in g.refs:
             k = (key[0], r)
             self._water_refs[k] = self._water_refs.get(k, 0) + 1
@@ -1212,7 +1224,8 @@ class ContourLayer(QGraphicsItem):
         # no height - still intersects anything
         rect = QRectF(float(xs.min()) - 1, float(ys.min()) - 1,
                       float(xs.max() - xs.min()) + 2, float(ys.max() - ys.min()) + 2)
-        piece = _Piece(path, rect, g.ele, self._label(g.ele, pts), g.pts)
+        piece = _Piece(path, rect, g.ele, self._label(g.ele, pts), g.pts, draft=bool(g.way.tags.get('danu:draft')))
+        piece.label.draft = piece.draft
         self._pieces[key] = piece
         if g.ele not in self.paths:
             self._levels_moved = True
@@ -1357,6 +1370,10 @@ class ContourLayer(QGraphicsItem):
         near = self._segments_in(x - tolerance, y - tolerance, x + tolerance, y + tolerance)
         if not len(near):
             return None
+        if not self._draft_boundary.contains(QPointF(x, y)):
+            near = np.asarray([i for i in near if not self._ways[int(self._seg_way[i])].way.tags.get('danu:draft')], dtype=np.int64)
+            if not len(near):
+                return None
         t, dist = geometry.nearest_point_on_segments((x, y), self._seg_a[near], self._seg_b[near])
         k = int(dist.argmin())
         if dist[k] > tolerance:
@@ -1412,6 +1429,8 @@ class ContourLayer(QGraphicsItem):
         near: dict[int, float] = {}
         for k in np.flatnonzero(dist <= tolerance):
             w = int(self._seg_way[box[k]])
+            if self._outside_draft(x, y, self._ways[w].way.tags.get('danu:draft')):
+                continue
             near[w] = min(near.get(w, math.inf), float(dist[k]))
         return [(self._ways[w].square, self._ways[w].way, d) for w, d in sorted(near.items(), key=lambda kv: kv[1])]
 
@@ -1438,6 +1457,9 @@ class ContourLayer(QGraphicsItem):
                 return None
             i = near[k]
             square, ref = self._node_ref[int(i)]
+            node = square.nodes.get(ref)
+            if node is None or self._outside_draft(float(xy[i, 0]), float(xy[i, 1]), node.tags.get('danu:draft')):
+                continue
             if skip is None or (square.name, ref) != skip:
                 return square, ref, float(dist[k])
         return None
@@ -1610,13 +1632,24 @@ class ContourLayer(QGraphicsItem):
     def boundingRect(self) -> QRectF:
         return self._bounds
 
+    def _draw_draft_path(self, painter, path, draft):
+        if draft:
+            painter.save()
+            painter.setClipPath(self._draft_boundary, Qt.ClipOperation.IntersectClip)
+        painter.drawPath(path)
+        if draft:
+            painter.restore()
+
+    def _outside_draft(self, x, y, draft):
+        return bool(draft) and not self._draft_boundary.contains(QPointF(x, y))
+
     def paint(self, painter: QPainter, option, widget=None):
         # all three together, before the early returns: drawn_ways was reset
         # further down and kept last paint's count whenever this returned
         # early, so below ZOOM_INDEX it reported ways drawn while
         # drawn_levels correctly reported none
         self.drawn_levels = self.drawn_labels = self.drawn_ways = 0
-        if not self.paths:
+        if not (self.paths or self.water or self.water_fills or self.coasts or self.spots):
             return
         scale = painter.worldTransform().m11()
         zoom = m.zoom_for_scale(scale)
@@ -1652,7 +1685,7 @@ class ContourLayer(QGraphicsItem):
                 continue
             pen = QPen(DARK if dark else self.colour(ele), line_width(zoom, index))
             pen.setCosmetic(True)
-            levels.append((pen, [path for piece in visible for path in piece.drawn(rect, scale)]))
+            levels.append((pen, [(path, piece.draft) for piece in visible for path in piece.drawn(rect, scale)]))
             self.drawn_ways += len(visible)
             self.drawn_levels += 1
         for mode, clip in self.blends(dark, rect):
@@ -1662,8 +1695,8 @@ class ContourLayer(QGraphicsItem):
                 painter.setClipPath(clip)
             for pen, drawn in levels:
                 painter.setPen(pen)
-                for path in drawn:
-                    painter.drawPath(path)
+                for path, draft in drawn:
+                    self._draw_draft_path(painter, path, draft)
             painter.restore()
         # what goes over the lines is drawn as it is: the active level, the
         # spot heights and the labels keep their own colours
@@ -1679,7 +1712,7 @@ class ContourLayer(QGraphicsItem):
                 painter.setPen(pen)
                 for piece in active:
                     for path in piece.drawn(rect, scale):
-                        painter.drawPath(path)
+                        self._draw_draft_path(painter, path, piece.draft)
         self._paint_coasts(painter, near, scale, zoom)
         self._paint_spots(painter, near, scale, zoom, view)
         if zoom >= ZOOM_LABELS:
@@ -1708,10 +1741,18 @@ class ContourLayer(QGraphicsItem):
         return [(float(x), float(y), float(dx), float(dy)) for (x, y), (dx, dy) in zip(xy[ok], d[ok], strict=True)]
 
     def _paint_coasts(self, painter: QPainter, rect: QRectF, scale: float, zoom: float) -> None:
+        self.drawn_coast_marks = 0
+        self._paint_coast_group(painter, rect, scale, zoom, False)
+        if any(self._geoms[key].way.tags.get('danu:draft') for key in self.coasts):
+            painter.save()
+            painter.setClipPath(self._draft_boundary, Qt.ClipOperation.IntersectClip)
+            self._paint_coast_group(painter, rect, scale, zoom, True)
+            painter.restore()
+
+    def _paint_coast_group(self, painter, rect, scale, zoom, draft):
         """Each coastline in the coast's colour, a V pointing the way it runs
         and a tick on its sea side - drawn at every zoom the contours
         are, since one drawn backwards floods the land."""
-        self.drawn_coast_marks = 0
         if not self.coasts:
             return
         a = COAST_ARROW_PX / scale
@@ -1719,6 +1760,8 @@ class ContourLayer(QGraphicsItem):
         heads, ticks = QPainterPath(), QPainterPath()
         lines = []
         for key, (_, _, box, path) in self.coasts.items():
+            if bool(self._geoms[key].way.tags.get('danu:draft')) != draft:
+                continue
             if not box.intersects(grown):
                 continue
             lines.append(path)
@@ -1825,7 +1868,7 @@ class ContourLayer(QGraphicsItem):
             pad = 8.0 / scale
             view = device_scene_rect(painter).adjusted(-pad, -pad, pad, pad)
             for piece in self._in('water_fills', self.water_fills, self.water_fills.values, rect):
-                painter.drawPath(piece.fill(view))
+                self._draw_draft_path(painter, piece.fill(view), piece.draft)
                 self.drawn_water_fills += 1
             if self.fills:
                 faint = QPen(WATER.lighter(130), 1.0, Qt.PenStyle.DashLine)
@@ -1833,7 +1876,7 @@ class ContourLayer(QGraphicsItem):
                 painter.setPen(faint)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 for piece in self._in('fills', self.fills, self.fills.values, rect):
-                    painter.drawPath(piece.path)
+                    self._draw_draft_path(painter, piece.path, piece.draft)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(WATER_FILL)
             if not self.water:
@@ -1843,7 +1886,7 @@ class ContourLayer(QGraphicsItem):
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             for piece in self._in('water', self.water, self.water.values, rect):
-                painter.drawPath(piece.path)
+                self._draw_draft_path(painter, piece.path, piece.draft)
                 self.drawn_water += 1
             self._paint_lake_levels(painter, rect if near is None else near, scale, zoom)
         finally:
@@ -1857,6 +1900,8 @@ class ContourLayer(QGraphicsItem):
         graded at three hundred vertices reads as a river with levels on it
         and not as three hundred hilltops."""
         painter.save()
+        if spot.draft:
+            painter.setClipPath(self._draft_boundary, Qt.ClipOperation.IntersectClip)
         painter.translate(spot.x, spot.y)
         painter.scale(1.0 / scale, 1.0 / scale)
         h = SPOT_PX * 0.85
@@ -1902,8 +1947,12 @@ class ContourLayer(QGraphicsItem):
             if piece.ele is None or not piece.rect.intersects(rect):
                 continue
             c = piece.rect.center()
+            if piece.draft and not self._draft_boundary.contains(c):
+                continue
             tp = self._text_path(f'{piece.ele:g} m', font)
             painter.save()
+            if piece.draft:
+                painter.setClipPath(self._draft_boundary, Qt.ClipOperation.IntersectClip)
             painter.translate(c)
             painter.scale(1.0 / scale, 1.0 / scale)
             painter.translate(-tp.boundingRect().width() / 2, tp.boundingRect().height() / 2)
@@ -1945,6 +1994,8 @@ class ContourLayer(QGraphicsItem):
         view = rect if view is None else view
         x0, y0, x1, y1 = rect.left(), rect.top(), rect.right(), rect.bottom()
         for spot in self.spots.values():
+            if self._outside_draft(spot.x, spot.y, spot.draft):
+                continue
             inside = x0 <= spot.x <= x1 and y0 <= spot.y <= y1
             if spot.on_water:
                 if not (inside if zoom >= ZOOM_WATER_LABELS or zoom < ZOOM_LABELS
@@ -1959,6 +2010,8 @@ class ContourLayer(QGraphicsItem):
                 continue
             colour = self.colour(spot.ele)
             painter.save()
+            if spot.draft:
+                painter.setClipPath(self._draft_boundary, Qt.ClipOperation.IntersectClip)
             painter.translate(spot.x, spot.y)
             # undoing the view's scale is what makes the radius below a count
             # of device pixels. It is not redundant beside the cosmetic pens:
@@ -1998,6 +2051,9 @@ class ContourLayer(QGraphicsItem):
             return None
         best = None
         for spot in self.spots.values():
+            if (self._outside_draft(x, y, spot.draft)
+                    or self._outside_draft(spot.x, spot.y, spot.draft)):
+                continue
             if spot.on_water:
                 continue        # a level on a river: picked as a vertex of it
             d = math.hypot(spot.x - x, spot.y - y)
@@ -2012,6 +2068,8 @@ class ContourLayer(QGraphicsItem):
         distance, nearest vertex id, its distance, outline)."""
         out = []
         for key, piece in self.water.items():
+            if piece.draft and not self._draft_boundary.contains(QPointF(x, y)):
+                continue
             r = piece.rect
             if not (r.left() - tolerance <= x <= r.right() + tolerance
                     and r.top() - tolerance <= y <= r.bottom() + tolerance):
@@ -2255,12 +2313,16 @@ class ContourLayer(QGraphicsItem):
         x0, y0, x1, y1 = rect.left(), rect.top(), rect.right(), rect.bottom()
         every = zoom >= ZOOM_ALL
         for lab in self.labels:
+            if lab.draft and not self._draft_boundary.contains(QPointF(lab.x, lab.y)):
+                continue
             if lab.length * scale < MIN_LABEL_PX or not (x0 <= lab.x <= x1 and y0 <= lab.y <= y1):
                 continue
             if not every and not self.is_index(lab.ele):
                 continue
             tp = self._text_path(f'{lab.ele:g}', font)
             painter.save()
+            if lab.draft:
+                painter.setClipPath(self._draft_boundary, Qt.ClipOperation.IntersectClip)
             painter.translate(lab.x, lab.y)
             painter.rotate(lab.angle)
             painter.scale(1.0 / scale, 1.0 / scale)      # pixels, whatever the zoom

@@ -133,6 +133,38 @@ page back over whatever is open.
 Every key can be changed in **File › Preferences…**; **Help › Keys** lists
 them as they are set now.
 
+### Use a JOSM draft before it appears on the map
+
+Save your JOSM layer as an `.osm` file, then choose **File › JOSM drafts**.
+Under **Water features**, **Coastline**, or **Peaks**, choose the import
+option and select your file. You can use the same file for all three;
+roads, buildings and other unrelated features are ignored.
+
+These are terrain inputs: draft coastlines are at sea level, and peaks with
+an elevation constrain the terrain, even before you have drawn contours.
+They are saved with your terrain squares. Nothing is sent to the OGF map
+database. Hide the background tile layer if its published coastline makes
+your draft hard to see.
+
+After saving changes in JOSM, choose **Reload file** in the same submenu.
+Reload replaces that category's previous draft throughout the currently
+open working area, including removing features absent from the new file.
+Choosing another file replaces the old source too. Changes made to those
+imported features in Danu are overwritten; your separately drawn contours
+are kept. **Remove imported features** clears that category's draft.
+Each operation is one undo/redo step.
+
+Features wholly outside the working area's squares are excluded. Features
+crossing its boundary keep their complete geometry, but are drawn only
+inside the working area. Changing the working area does not automatically
+read the JOSM file again: reload to bring in features for the new area.
+
+Incomplete features are listed in an import report. Choose **Import valid
+features only** to skip them, or **Cancel** to keep the previous draft. A
+missing or unreadable file leaves the previous draft intact. Peaks need a
+usable elevation, and lakes need complete, closed boundaries, including
+their multipolygon members.
+
 ## 5. See the ground
 
 **Ctrl+R** (Surface › Rebuild surface) builds the surface the contours make,
